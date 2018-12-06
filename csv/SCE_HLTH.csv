@@ -1,4 +1,4 @@
-Month,Weekend,Hour,Heating,Cooling,Ventilation,Water_Heating,Cooking,Refrigeration,Exterior_Lighting,Interior_Lighting,Office_Equipment,Miscellaneous,Process,Motors,Air_Compressors
+Month,Daytype,Hour,Heating,Cooling,Ventilation,Water_Heating,Cooking,Refrigeration,Exterior_Lighting,Interior_Lighting,Office_Equipment,Miscellaneous,Process,Motors,Air_Compressors
 1,WEEKDAY,0,0.1749,0.1277,0.4727,0.0479,0.0078,0.0754,0.1468,0.3357,0.0674,0.1700,0.0687,0.0511,0.0304
 1,WEEKDAY,1,0.1794,0.1222,0.4726,0.0479,0.0078,0.0740,0.1468,0.3231,0.0671,0.1680,0.0687,0.0485,0.0303
 1,WEEKDAY,2,0.1840,0.1172,0.4728,0.0479,0.0083,0.0735,0.1468,0.3168,0.0673,0.1667,0.0687,0.0492,0.0314
