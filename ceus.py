@@ -1,5 +1,10 @@
-import glob, os, datetime, xlrd, csv, requests
+import glob, os, datetime
+import xlrd, csv, pandas
+import numpy
 
+#
+# Building data
+#
 def load_xls(file):
 	if not os.path.isfile(file):
 		raise Exception("%s: open failed" % file)
@@ -31,9 +36,8 @@ def load_xls(file):
 			data[sheet.name].append(datarow)
 	return data
 
-def convert(from_xls,to_csv) :
-	print("%s: updating from %s" % (to_csv,from_xls))
-	data = load_xls(from_xls)
+def convert_to_loadshape(data,to_csv) :
+	print("updating from %s" % to_csv)
 
 	# segment information
 	segment = data["ctrlSEGINFO"]
@@ -46,7 +50,8 @@ def convert(from_xls,to_csv) :
 
 	# summary
 	summary = data["Summary"]
-	enduse_label = ["Heating","Cooling","Ventilation","Water Heating","Cooking","Refrigeration","Exterior Lighting","Interior Lighting","Office Equipment","Miscellaneous","Process","Motors","Air Compressors"]
+	enduse_label = ["Heating","Cooling","Ventilation","Water Heating","Cooking","Refrigeration",
+		"Exterior Lighting","Interior Lighting","Office Equipment","Miscellaneous","Process","Motors","Air Compressors"]
 	floorarea_list = []
 	for row in range(5,18) :
 		rowdata = summary[row]
@@ -61,7 +66,8 @@ def convert(from_xls,to_csv) :
 	assert(enduse_data[0][1]=="Mth")
 	assert(enduse_data[0][2]=="Dy")
 	assert(enduse_data[0][3]=="Hr")
-	enduse_heading = ["Heating","Cooling","Vent","WaterHeat","Cooking","Refrig","ExtLight","IntLight","OfficeEquip","Misc","Process","Motors","AirComp"]
+	enduse_heading = ["Heating","Cooling","Vent","WaterHeat","Cooking","Refrig",
+		"ExtLight","IntLight","OfficeEquip","Misc","Process","Motors","AirComp"]
 	enduse_loads = []
 	active_enduses = []
 	header = ["Month","Daytype","Hour"]
@@ -84,54 +90,82 @@ def convert(from_xls,to_csv) :
 		writer.writerow(header)
 		for row in enduse_loads:
 			writer.writerow(row)
-
 	return None
 
 def update_csv() :
 	for xls in os.listdir("xls/") :
 		if xls.endswith(".xls"):
-			csv = "csv/%s.csv" % os.path.splitext(xls)[0]
+			csv = "enduse/%s.csv" % os.path.splitext(xls)[0]
+			data = None
 			if not os.path.isfile(csv) :
-				xls = "xls/"+xls
-				convert(from_xls=xls,to_csv=csv)
-	print("csv is up to date")
+				data = load_xls("xls/"+xls)
+				convert_to_loadshape(data=data,to_csv=csv)
+	print("enduse/*.csv up to date")
 
-def get_weather(station,filename) :
-	if not os.path.isfile(filename) :
-		url = 'http://ipm.ucanr.edu/calludt.cgi/WXDATAREPORT'
-		res = requests.post(url, dict(
-			STN=station,
-			MAP='',
-			FROMMONTH='January',
-			FROMDAY='1',
-			FROMYEAR='2002',
-			THRUMONTH='December',
-			THRUDAY='31',
-			THRUYEAR='2002',
-			DT_PRECIP='on',
-			DT_AIR='on',
-			DT_WX='on',
-			DT_AIRDBS='on',
-			FFMT='T',
-			UNITS='E',
-			ACTION='RETRIEVE%20DATA'
-			))
-		data = []
-		with open(filename,"w") as csvfile:
-			for row in res.text.split('\n') :
-				if ( row[:1] >= 'A' and row[:1] <= 'Z' ) or row[:10] == '"Station",' :
-					csvfile.write(row)
-	print("weather is up to date")
+def find(data) :
+	result = []
+	for key, item in data.items() :
+		if not type(item) is bool :
+			exception("test result of item %d must be boolean" % key)
+		if item == True :
+			result.append(key)
+	return result
+
+#
+# Weather data
+#
+def get_weather(station) :
+	data = pandas.read_csv('weather/lcd.csv', dtype={'HOURLYDRYBULBTEMPF':str}, usecols=['STATION','DATE','HOURLYDRYBULBTEMPF'])
+	ndx = find(data['STATION']==station)
+	return data.ix[ndx,['DATE','HOURLYDRYBULBTEMPF']].dropna()
 
 def update_weather() :
-	with open('weather_cities.csv','r') as csvfile :
-		reader = csv.reader(csvfile)
-		for row in reader :
-			data = get_weather(station=row[1],filename='weather/%s.csv'%row[0])
+	zones = pandas.read_csv('weather_zones.csv')
+	for ndx, zone in zones.iterrows() :
+		name = zone['AREA']
+		file = 'weather/%s.csv' % name
+		if os.path.isfile(file) :
+			continue
+		try :
+			station = zone['STATION']
+			data =get_weather(station)
+			if len(data) == 0 :
+				print("no data for %s (%s)" % (name,station))
+				continue
+			else :
+				print("processing %s..." % name)
+			date = data['DATE']
+			first = data.iterrows().next()[0]
+			year = datetime.datetime.strptime(date[first],'%Y-%m-%d %H:%M').year
+			starttime = datetime.datetime(year,1,1,0,0,0)
+			stoptime = datetime.datetime(year+1,1,1,0,0,0)
+			dt = list(map(lambda x: (datetime.datetime.strptime(x,'%Y-%m-%d %H:%M')-starttime).total_seconds()/3600.0,date))
+			hour = numpy.arange(0,8760,1)
+			timestamp = list(map(lambda x: (starttime+datetime.timedelta(hours=x)).strftime('%Y-%m-%d %H:%M:%S'),hour))
+			Tdb = numpy.around(numpy.interp(numpy.arange(0,8760,1),dt,list(map(lambda x: numpy.float64(x),data['HOURLYDRYBULBTEMPF']))),1)
+			with open(file,'w') as csvfile:
+				writer = csv.writer(csvfile)
+				writer.writerow(['hour','drybulb'])
+				for row in sorted(dict(zip(timestamp,Tdb)).items()):
+					writer.writerow(row)
+		except :
+			print(Exception("unable to process zone '%s'" % name))
+			raise 
+	print("weather/*.csv up to date")
 
+#
+# Sensititivy Analysis
+#
+def update_sensitivity() :
+	print("sensitivity/*.csv up to date")
+
+#
+# MAIN
+#
 def main():
-	update_csv()
 	update_weather()
+	update_csv()
+	update_sensitivity()
 
 if __name__ == '__main__':
 	main()
