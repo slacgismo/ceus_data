@@ -1,4 +1,4 @@
-import glob, os, datetime, xlrd, csv
+import glob, os, datetime, xlrd, csv, requests
 
 def load_xls(file):
 	if not os.path.isfile(file):
@@ -64,7 +64,7 @@ def convert(from_xls,to_csv) :
 	enduse_heading = ["Heating","Cooling","Vent","WaterHeat","Cooking","Refrig","ExtLight","IntLight","OfficeEquip","Misc","Process","Motors","AirComp"]
 	enduse_loads = []
 	active_enduses = []
-	header = ["Month","Weekend","Hour"]
+	header = ["Month","Daytype","Hour"]
 	for col in range(4,17) :
 		assert(enduse_data[0][col]==enduse_heading[col-4])
 		if floorarea_list[col-4] > 0 :
@@ -87,14 +87,51 @@ def convert(from_xls,to_csv) :
 
 	return None
 
-def main():
+def update_csv() :
 	for xls in os.listdir("xls/") :
 		if xls.endswith(".xls"):
 			csv = "csv/%s.csv" % os.path.splitext(xls)[0]
 			if not os.path.isfile(csv) :
 				xls = "xls/"+xls
 				convert(from_xls=xls,to_csv=csv)
-	print("Files are up to date")
+	print("csv is up to date")
+
+def get_weather(station,filename) :
+	if not os.path.isfile(filename) :
+		url = 'http://ipm.ucanr.edu/calludt.cgi/WXDATAREPORT'
+		res = requests.post(url, dict(
+			STN=station,
+			MAP='',
+			FROMMONTH='January',
+			FROMDAY='1',
+			FROMYEAR='2002',
+			THRUMONTH='December',
+			THRUDAY='31',
+			THRUYEAR='2002',
+			DT_PRECIP='on',
+			DT_AIR='on',
+			DT_WX='on',
+			DT_AIRDBS='on',
+			FFMT='T',
+			UNITS='E',
+			ACTION='RETRIEVE%20DATA'
+			))
+		data = []
+		with open(filename,"w") as csvfile:
+			for row in res.text.split('\n') :
+				if ( row[:1] >= 'A' and row[:1] <= 'Z' ) or row[:10] == '"Station",' :
+					csvfile.write(row)
+	print("weather is up to date")
+
+def update_weather() :
+	with open('weather_cities.csv','r') as csvfile :
+		reader = csv.reader(csvfile)
+		for row in reader :
+			data = get_weather(station=row[1],filename='weather/%s.csv'%row[0])
+
+def main():
+	update_csv()
+	update_weather()
 
 if __name__ == '__main__':
 	main()
