@@ -171,6 +171,7 @@ def update_weather() :
 #
 def update_sensitivity() :
 	fcz = None
+	result = {}
 	for xls in os.listdir("xls/") :
 		if xls.endswith(".xls") :
 			csv = "sensitivity/%s.csv" % os.path.splitext(xls)[0]
@@ -179,6 +180,9 @@ def update_sensitivity() :
 				if type(fcz) is None or fcz != xls.split('_')[0] :
 					fcz = xls.split('_')[0]
 					weather = load_weather(fcz)
+				#if fcz[0] in result.keys() :
+				#	result[fcz[0]] = {}
+				#result[fcz[0]][fcz[1]] = 
 				get_sensitivity(data,weather)
 	print("sensitivity/*.csv up to date")
 
@@ -194,7 +198,7 @@ def get_sensitivity(data,weather) :
 	y = {}
 	found = {}
 	senscols = {}
-	result = {}
+	#result = {}
 	remap = {"OffEquip":"OfficeEquip", "Cook":"Cooking", "Cool":"Cooling", "Heat":"Heating", "HotWater":"WaterHeat"} # fix enduse inconsitencies
 	samap = { # identify segments over which sensitivity is to be computed
 		"Heating" : {'Theat': 55.0},
@@ -289,18 +293,38 @@ def get_sensitivity(data,weather) :
 				#print('Columns: %s' % cols)
 				AA = AA[:,cols]
 				yy = y[enduse_name][found[enduse_name]]
-				print('Enduse %s, %d samples, A is %dx%d, y is %dx%d'
-					% (enduse_name,len(found[enduse_name]),len(AA),len(cols), len(yy), len(cols)))
+				#print('Enduse %s, %d samples, A is %dx%d, y is %dx%d'
+				#	% (enduse_name,len(found[enduse_name]),len(AA),len(cols), len(yy), len(cols)))
 				At = AA.transpose()
 				AtA = numpy.dot(At,AA)
 				AtAi = numpy.linalg.inv(AtA)
 				AtAiAt = numpy.dot(AtAi,At)
 				x = numpy.dot(AtAiAt,yy)
+
+				# output
+				xx = numpy.zeros(50)
+				for h,xh in dict(zip(cols,x)).items() :
+					#print(h,xh[0],xx)
+					xx[h] = xh[0]
+				xx[1:47] += x[0]
+				rs = pandas.DataFrame()
+				rs['WeekdayLoad'] = xx[0:24]
+				rs['WeekendLoad'] = xx[24:48]
+				if 'Theat' in senscols[enduse_name] :
+					rs['HeatingSensitivity'] = xx[senscols[enduse_name]['Theat']]
+				else :
+					rs['HeatingSensitivity'] = 0.0
+				if 'Tcool' in senscols[enduse_name] :
+					rs['CoolingSensitivity'] = xx[senscols[enduse_name]['Tcool']]
+				else :
+					rs['CoolingSensitivity'] = 0.0
+				rs.index.name = 'HourOfDay'
 				if not os.path.exists('output') :
 					os.mkdir('output')
 				if os.path.isdir('output') :
-					result = pandas.DataFrame(data=x, index=cols)
-					result.to_csv('output/%s_%s.csv' % (segment_name,enduse_name))
+					rs.to_csv('output/%s_%s.csv' % (segment_name,enduse_name))
+				#print(rs)
+				#result[enduse_name] = rs
 			except :
 				if not os.path.exists('dump') :
 					os.mkdir('dump')
@@ -310,8 +334,7 @@ def get_sensitivity(data,weather) :
 					pandas.DataFrame(AA).to_csv('dump/%s_%s_A.csv'%(segment_name,enduse_name))
 					pandas.DataFrame(yy).to_csv('dump/%s_%s_y.csv'%(segment_name,enduse_name))
 				raise
-
-
+	#return result
 #
 # MAIN
 #
