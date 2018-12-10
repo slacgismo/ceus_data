@@ -1,6 +1,8 @@
-import glob, os, datetime
-import xlrd, csv, pandas
-import numpy
+import sys, os
+print(sys.version)
+
+import glob, datetime
+import xlrd, csv, pandas, numpy
 
 enduse_dict = dict(zip(["Heating","Cooling","Vent","WaterHeat","Cooking","Refrig",
 		"ExtLight","IntLight","OfficeEquip","Misc","Process","Motors","AirComp"],
@@ -186,38 +188,67 @@ def get_sensitivity(data,weather) :
 	assert(segment[0][0]=='SegID')
 	segment_name = segment[0][1]
 	year = int(segment[2][1])
+	day0 = datetime.date(year,1,1)
 	enduses = data['expEndUse8760']
 	A = {}
 	y = {}
 	found = {}
+	senscols = {}
 	result = {}
+	remap = {"OffEquip":"OfficeEquip", "Cook":"Cooking", "Cool":"Cooling", "Heat":"Heating", "HotWater":"WaterHeat"} # fix enduse inconsitencies
+	samap = { # identify segments over which sensitivity is to be computed
+		"Heating" : {'Theat': 55.0},
+		"Cooling" : {'Tcool': 65.0},
+		"Vent" : {'Theat': 55.0,'Tcool': 65.0},
+		"WaterHeat" : {},
+		"Cooking" : {},
+		"Refrig" : {},
+		"ExtLight" : {},
+		"IntLight" : {},
+		"OfficeEquip": {},
+		"Misc" : {},
+		"Process" : {},
+		"Motors" : {},
+		"AirComp" : {},
+		}
 	enduse_keys = enduse_dict.keys()
 	for enduse_name in enduse_keys :
-		A[enduse_name] = numpy.zeros((8760,50))
+		A[enduse_name] = numpy.zeros((8760,48 + len(samap[enduse_name])))
 		y[enduse_name] = numpy.zeros((8760,1))
 		found[enduse_name] = []
+		senscols[enduse_name] = {}
+		if 'Theat' in samap[enduse_name] :
+			senscols[enduse_name]['Theat'] = 48
+		if 'Tcool' in samap[enduse_name] :
+			senscols[enduse_name]['Tcool'] = 48+len(senscols[enduse_name].keys())
 	print("processing %s (%d rows, %d cols)..." % (segment_name,len(enduses),len(enduses[0])))
 
-	remap = {"OffEquip":"OfficeEquip", "Cook":"Cooking", "Cool":"Cooling", "Heat":"Heating", "HotWater":"WaterHeat"} # fix enduse inconsitencies
 	for row in enduses[1:] :
 		enduse_name = row[1]
+		if enduse_name in remap.keys() :
+			enduse_name = remap[enduse_name]
 		fuel = row[2]
 		month = int(row[3])
 		day = int(row[4])
 		load = row[5:29]
+		heat_col = None
+		if 'Theat' in senscols[enduse_name] :
+			heat_col = senscols[enduse_name]['Theat']
+		cool_col = None
+		if 'Tcool' in senscols[enduse_name] :
+			cool_col = senscols[enduse_name]['Tcool']
 		if fuel == 'Elec' :
-			if enduse_name in remap.keys() :
-				enduse_name = remap[enduse_name]
 			if enduse_name not in enduse_keys :
 				raise Exception("%s.%s(%d,%d): enduse '%s' not found in enduse_dict" % (segment_name,enduse_name,month,day,enduse_name))
 			else:
 				date = datetime.date(year,month,day)
-				if date.weekday < 5 :
+				doy = date.toordinal() - day0.toordinal()
+				if date.weekday() < 5 :
 					hour0 = 0
 				else:
 					hour0 = 24
 				for hour in range(0,24) :
-					r = (day-1)*24 + hour
+					r = doy*24 + hour
 					if load[hour] > 0.0 :
 						T = weather["drybulb"][r]
 						c = hour0 + hour
@@ -225,39 +256,59 @@ def get_sensitivity(data,weather) :
 						if c > 0 :
 							A[enduse_name][r,0] = 1.0
 						A[enduse_name][r,c] = 1.0
-						if T < Theat :
-							A[enduse_name][r,48] = T - Theat
-							print("%s.%s(%2d,%2d): row %3d, col %2d, hour %2d, Theat %.1f, y %.1f" % (segment_name,enduse_name,month,day,r,c,hour,T,load[hour]))
-						elif T > Tcool :
-							A[enduse_name][r,49] = Tcool - T
-							print("%s.%s(%2d,%2d): row %3d, col %2d, hour %2d, Tcool %.1f, y %.1f" % (segment_name,enduse_name,month,day,r,c,hour,T,load[hour]))
+						if T < Theat and heat_col != None :
+							A[enduse_name][r,heat_col] = T - Theat
+							#print("%s.%s(%2d,%2d): row %3d, col %2d, hour %2d, Theat %.1f, y %.1f" % (segment_name,enduse_name,month,day,r,c,hour,T,load[hour]))
+						elif T > Tcool and cool_col != None:
+							A[enduse_name][r,cool_col] = Tcool - T
+							#print("%s.%s(%2d,%2d): row %3d, col %2d, hour %2d, Tcool %.1f, y %.1f" % (segment_name,enduse_name,month,day,r,c,hour,T,load[hour]))
+						#else :
+							#print("%s.%s(%2d,%2d): row %3d, col %2d, hour %2d, Tnone %.1f, y %.1f" % (segment_name,enduse_name,month,day,r,c,hour,T,load[hour]))
 						y[enduse_name][r] = load[hour]
 						found[enduse_name].append(r)
 	for enduse_name in enduse_keys :
 		if len(found[enduse_name]) > 0 :
-			AA = A[enduse_name][found[enduse_name],:]
-			yy = y[enduse_name][found[enduse_name],:]
+			heat_col = None
+			if 'Theat' in senscols[enduse_name] :
+				heat_col = senscols[enduse_name]['Theat']
+			cool_col = None
+			if 'Tcool' in senscols[enduse_name] :
+				cool_col = senscols[enduse_name]['Tcool']
 			#for row in range(len(found[enduse_name])) :
 				#print(AA[row,:],yy[row])	
-			print('Enduse %s, %d samples, A is %dx%d, y is %dx%d'
-				% (enduse_name,len(found[enduse_name]),len(AA),len(AA[0]), len(yy), len(yy[0])))
 			try :
+				cols = []
+				AA = A[enduse_name][found[enduse_name],:]
+				for c in range(0,48) :
+					if numpy.count_nonzero(AA[:,c]) > 0 :
+						cols.append(c)
+				if 'Theat' in senscols[enduse_name] :
+					cols.append(senscols[enduse_name]['Theat'])
+				if 'Tcool' in senscols[enduse_name] :
+					cols.append(senscols[enduse_name]['Tcool'])
+				#print('Columns: %s' % cols)
+				AA = AA[:,cols]
+				yy = y[enduse_name][found[enduse_name]]
+				print('Enduse %s, %d samples, A is %dx%d, y is %dx%d'
+					% (enduse_name,len(found[enduse_name]),len(AA),len(cols), len(yy), len(cols)))
 				At = AA.transpose()
 				AtA = numpy.dot(At,AA)
 				AtAi = numpy.linalg.inv(AtA)
 				AtAiAt = numpy.dot(AtAi,At)
 				x = numpy.dot(AtAiAt,yy)
-				result[enduse_name] = {
-					'weekday': [x[0],x[1:23]+x[0]],
-					'weekend': x[0:23] + x[0],
-					'heating': x[48],
-					'cooling': x[49],	
-				}
-				print('Enduse %s, %d samples, A is %dx%d, y is %dx%d, dTh/dt=%f, dTc/dt=%f'
-					% (enduse_name,len(found[enduse_name]),len(AA),len(AA[0]), len(yy), len(yy[0]), x[48], x[49]))
+				if not os.path.exists('output') :
+					os.mkdir('output')
+				if os.path.isdir('output') :
+					result = pandas.DataFrame(data=x, index=cols)
+					result.to_csv('output/%s_%s.csv' % (segment_name,enduse_name))
 			except :
-				pandas.DataFrame(AA).to_csv('tmp/%s_%s_A.csv'%(segment_name,enduse_name))
-				pandas.DataFrame(yy).to_csv('tmp/%s_%s_y.csv'%(segment_name,enduse_name))
+				if not os.path.exists('dump') :
+					os.mkdir('dump')
+				if os.path.isdir('dump') :
+					print('Enduse %s, %d samples, A is %dx%d, y is %dx%d: sensitivity analysis failed -- dumping data to tmp/%s_%s_[Ay].csv'
+						% (enduse_name,len(found[enduse_name]),len(AA),len(AA[0]), len(yy), len(yy[0]), segment_name, enduse_name))
+					pandas.DataFrame(AA).to_csv('dump/%s_%s_A.csv'%(segment_name,enduse_name))
+					pandas.DataFrame(yy).to_csv('dump/%s_%s_y.csv'%(segment_name,enduse_name))
 				raise
 
 
