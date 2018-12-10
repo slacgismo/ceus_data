@@ -319,10 +319,11 @@ def get_sensitivity(data,weather) :
 				else :
 					rs['CoolingSensitivity'] = 0.0
 				rs.index.name = 'HourOfDay'
-				if not os.path.exists('output') :
-					os.mkdir('output')
-				if os.path.isdir('output') :
-					rs.to_csv('output/%s_%s.csv' % (segment_name,enduse_name))
+				path = 'loadshape/%s' %  segment_name.replace('_','/')
+				if not os.path.exists(path) :
+					os.makedirs(path)
+				if os.path.isdir(path) :
+					rs.to_csv('%s/%s.csv' % (path,enduse_name))
 				#print(rs)
 				#result[enduse_name] = rs
 			except :
