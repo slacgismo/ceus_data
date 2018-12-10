@@ -2,15 +2,25 @@ import glob, os, datetime
 import xlrd, csv, pandas
 import numpy
 
+enduse_dict = dict(zip(["Heating","Cooling","Vent","WaterHeat","Cooking","Refrig",
+		"ExtLight","IntLight","OfficeEquip","Misc","Process","Motors","AirComp"],
+		["Heating","Cooling","Ventilation","Water Heating","Cooking","Refrigeration",
+		"Exterior Lighting","Interior Lighting","Office Equipment","Miscellaneous","Process","Motors","Air Compressors"]
+		))
+Theat = 55.0
+Tcool = 65.0
+
 #
 # Building data
 #
-def load_xls(file):
+def load_xls(file,sheets='all'):
 	if not os.path.isfile(file):
 		raise Exception("%s: open failed" % file)
 	xls = xlrd.open_workbook(file)
 	data = {}
 	for sheet in xls.sheets():
+		if sheets != 'all' and not sheet.name in sheets :
+			continue;
 		data[sheet.name] = []
 		for row in range(sheet.nrows):
 			datarow = []
@@ -50,15 +60,11 @@ def convert_to_loadshape(data,to_csv) :
 
 	# summary
 	summary = data["Summary"]
-	enduse_label = ["Heating","Cooling","Ventilation","Water Heating","Cooking","Refrigeration",
-		"Exterior Lighting","Interior Lighting","Office Equipment","Miscellaneous","Process","Motors","Air Compressors"]
 	floorarea_list = []
 	for row in range(5,18) :
 		rowdata = summary[row]
-		assert(rowdata[1]==enduse_label[row-5])
+		assert(rowdata[1]==enduse_dict.values()[row-5])
 		floorarea_list.append(rowdata[2])	
-	#print("  enduse labels..... %s" % enduse_label)
-	#print("  floorarea......... %s" % floorarea_list)
 
 	# enduse
 	enduse_data = data["expMnthDT"]
@@ -66,16 +72,14 @@ def convert_to_loadshape(data,to_csv) :
 	assert(enduse_data[0][1]=="Mth")
 	assert(enduse_data[0][2]=="Dy")
 	assert(enduse_data[0][3]=="Hr")
-	enduse_heading = ["Heating","Cooling","Vent","WaterHeat","Cooking","Refrig",
-		"ExtLight","IntLight","OfficeEquip","Misc","Process","Motors","AirComp"]
 	enduse_loads = []
 	active_enduses = []
 	header = ["Month","Daytype","Hour"]
 	for col in range(4,17) :
-		assert(enduse_data[0][col]==enduse_heading[col-4])
+		assert(enduse_data[0][col]==enduse_dict.keys()[col-4])
 		if floorarea_list[col-4] > 0 :
 			active_enduses.append(col)
-			header.append(enduse_label[col-4].replace(" ","_"))
+			header.append(enduse_dict.values()[col-4].replace(" ","_"))
 	daytype_name = ["WEEKDAY","SATURDAY","SUNDAY","HOLIDAY"]
 	for row in range(1,2017) :
 		rowdata = enduse_data[row]
@@ -98,9 +102,24 @@ def update_csv() :
 			csv = "enduse/%s.csv" % os.path.splitext(xls)[0]
 			data = None
 			if not os.path.isfile(csv) :
-				data = load_xls("xls/"+xls)
+				data = load_xls(file="xls/"+xls,sheets=['ctrlSEGINFO','Summary','expMnthDT'])
 				convert_to_loadshape(data=data,to_csv=csv)
 	print("enduse/*.csv up to date")
+
+#
+# Weather data
+#
+def get_weather(station) :
+	data = pandas.read_csv('weather/lcd.csv', dtype={'HOURLYDRYBULBTEMPF':str}, usecols=['STATION','DATE','HOURLYDRYBULBTEMPF'])
+	ndx = find(data['STATION']==station)
+	result = data.ix[ndx,['DATE','HOURLYDRYBULBTEMPF']].dropna()
+	if len(result) == 0 :
+		print('get_weather(station=%s): no data found in LCD repository' % station)
+	return result
+
+def load_weather(station) :
+	data = pandas.read_csv('weather/%s.csv'%station)
+	return data
 
 def find(data) :
 	result = []
@@ -110,14 +129,6 @@ def find(data) :
 		if item == True :
 			result.append(key)
 	return result
-
-#
-# Weather data
-#
-def get_weather(station) :
-	data = pandas.read_csv('weather/lcd.csv', dtype={'HOURLYDRYBULBTEMPF':str}, usecols=['STATION','DATE','HOURLYDRYBULBTEMPF'])
-	ndx = find(data['STATION']==station)
-	return data.ix[ndx,['DATE','HOURLYDRYBULBTEMPF']].dropna()
 
 def update_weather() :
 	zones = pandas.read_csv('weather_zones.csv')
@@ -157,7 +168,98 @@ def update_weather() :
 # Sensititivy Analysis
 #
 def update_sensitivity() :
+	fcz = None
+	for xls in os.listdir("xls/") :
+		if xls.endswith(".xls") :
+			csv = "sensitivity/%s.csv" % os.path.splitext(xls)[0]
+			if not os.path.isfile(csv) :
+				data = load_xls(file="xls/"+xls,sheets=['ctrlSEGINFO','expEndUse8760'])
+				if type(fcz) is None or fcz != xls.split('_')[0] :
+					fcz = xls.split('_')[0]
+					weather = load_weather(fcz)
+				get_sensitivity(data,weather)
 	print("sensitivity/*.csv up to date")
+
+
+def get_sensitivity(data,weather) :
+	segment = data['ctrlSEGINFO']
+	assert(segment[0][0]=='SegID')
+	segment_name = segment[0][1]
+	year = int(segment[2][1])
+	enduses = data['expEndUse8760']
+	A = {}
+	y = {}
+	found = {}
+	result = {}
+	enduse_keys = enduse_dict.keys()
+	for enduse_name in enduse_keys :
+		A[enduse_name] = numpy.zeros((8760,50))
+		y[enduse_name] = numpy.zeros((8760,1))
+		found[enduse_name] = []
+	print("processing %s (%d rows, %d cols)..." % (segment_name,len(enduses),len(enduses[0])))
+
+	remap = {"OffEquip":"OfficeEquip", "Cook":"Cooking", "Cool":"Cooling", "Heat":"Heating", "HotWater":"WaterHeat"} # fix enduse inconsitencies
+	for row in enduses[1:] :
+		enduse_name = row[1]
+		fuel = row[2]
+		month = int(row[3])
+		day = int(row[4])
+		load = row[5:29]
+		if fuel == 'Elec' :
+			if enduse_name in remap.keys() :
+				enduse_name = remap[enduse_name]
+			if enduse_name not in enduse_keys :
+				raise Exception("%s.%s(%d,%d): enduse '%s' not found in enduse_dict" % (segment_name,enduse_name,month,day,enduse_name))
+			else:
+				date = datetime.date(year,month,day)
+				if date.weekday < 5 :
+					hour0 = 0
+				else:
+					hour0 = 24
+				for hour in range(0,24) :
+					r = (day-1)*24 + hour
+					if load[hour] > 0.0 :
+						T = weather["drybulb"][r]
+						c = hour0 + hour
+						#print("%s.%s(%2d,%2d): row %3d, col %2d, hour %2d, T %.1f, y %.1f" % (segment_name,enduse_name,month,day,r,c,hour,T,load[hour]))
+						if c > 0 :
+							A[enduse_name][r,0] = 1.0
+						A[enduse_name][r,c] = 1.0
+						if T < Theat :
+							A[enduse_name][r,48] = T - Theat
+							print("%s.%s(%2d,%2d): row %3d, col %2d, hour %2d, Theat %.1f, y %.1f" % (segment_name,enduse_name,month,day,r,c,hour,T,load[hour]))
+						elif T > Tcool :
+							A[enduse_name][r,49] = Tcool - T
+							print("%s.%s(%2d,%2d): row %3d, col %2d, hour %2d, Tcool %.1f, y %.1f" % (segment_name,enduse_name,month,day,r,c,hour,T,load[hour]))
+						y[enduse_name][r] = load[hour]
+						found[enduse_name].append(r)
+	for enduse_name in enduse_keys :
+		if len(found[enduse_name]) > 0 :
+			AA = A[enduse_name][found[enduse_name],:]
+			yy = y[enduse_name][found[enduse_name],:]
+			#for row in range(len(found[enduse_name])) :
+				#print(AA[row,:],yy[row])	
+			print('Enduse %s, %d samples, A is %dx%d, y is %dx%d'
+				% (enduse_name,len(found[enduse_name]),len(AA),len(AA[0]), len(yy), len(yy[0])))
+			try :
+				At = AA.transpose()
+				AtA = numpy.dot(At,AA)
+				AtAi = numpy.linalg.inv(AtA)
+				AtAiAt = numpy.dot(AtAi,At)
+				x = numpy.dot(AtAiAt,yy)
+				result[enduse_name] = {
+					'weekday': [x[0],x[1:23]+x[0]],
+					'weekend': x[0:23] + x[0],
+					'heating': x[48],
+					'cooling': x[49],	
+				}
+				print('Enduse %s, %d samples, A is %dx%d, y is %dx%d, dTh/dt=%f, dTc/dt=%f'
+					% (enduse_name,len(found[enduse_name]),len(AA),len(AA[0]), len(yy), len(yy[0]), x[48], x[49]))
+			except :
+				pandas.DataFrame(AA).to_csv('tmp/%s_%s_A.csv'%(segment_name,enduse_name))
+				pandas.DataFrame(yy).to_csv('tmp/%s_%s_y.csv'%(segment_name,enduse_name))
+				raise
+
 
 #
 # MAIN
