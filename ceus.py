@@ -1,14 +1,70 @@
-import sys, os
-print(sys.version)
+"""
+CEUS -- Data processing support for Commercial End-Use Survey data
 
+This program takes CEUS data and NOAA weather and generate loadshapes
+and temperature sensitivities for the various forecasting climate zones, 
+building types, and end-uses in the CEUS data set.
+
+   xls -----------------+                   +---> enduse/${FCZ}_${BTYPE}.csv 
+                        |                   |
+   weather -------------+---> [ceus.py] ----+---> loadshape/${FCZ}/${BTYPE}/${ENDUSE}.csv
+                        |                   |
+   weather_zones.csv ---+                   +---> dump/${FCZ}_${BTYPE}_[Ay].csv
+
+where ${FCZ} is the forecasting climate zone, e.g., FCZ01-FCZ13, ${BTYPE} is the
+building type, e.g., AOFF, AWHS, COLL, GROC, HLTH, LODG, LOFF, MISC, REFW, REST, 
+RETL, SCHL, and SOFF, and the ${ENDUSE} is the end use load type, e.g., AirComp, 
+Cooling, Heating, Misc, OfficeEquip, Refrig, WaterHeat, Cooking, ExtLight, IntLight, 
+Motors, Process, and Vent.
+
+Input Files
+-----------
+
+The 'xls' folder contains the CEUS data files encoded as ${FCZ}_${BTYPE}. These
+files were downloaded from http://capabilities.itron.com/CeusWeb/ChartsSF/Default2.aspx.
+The documentation for these files is included in the 'xls' folder.
+
+The 'weather' folder contains the NOAA weather data for the year in which the survey
+data was collecte. The weather files were downloaded from the NOAA Local Climatological 
+Data website at https://www.ncdc.noaa.gov/cdo-web/datatools/lcd.
+
+The weather_cities.csv file is used to identify the NOAA cities corresponding
+to each forecasting climate zone. This file is not used by the data processing
+and is only used to make the data requests from NOAA.
+
+Output Files
+------------
+
+The files in the 'enduse' folder contain the general commercial load data for 
+weekday, Saturday, Sunday and holidays for each month of the year.  Load records are
+given in normalized power density, i.e. W/sf.
+
+The files in the 'loadshape' folder contain the temperature sensitivity load models
+for each zone, building type, and end-use.  The heating and cooling temperature
+sensitivites are computed for Heating, Cooling and Ventilation end uses.  All the 
+other end-uses are fit without temperature sensitivity.
+
+Updating the Output
+-------------------
+
+  host% python ceus.py
+
+The process require roughly 10 minutes to update all data.  The 'weather' and enduse' 
+files are only updated if they are missing, so you must delete the files to force them
+to be rebuilt.  The 'loadshape' file are always updated.
+
+"""
+import sys, os
 import glob, datetime
 import xlrd, csv, pandas, numpy
 
-enduse_dict = dict(zip(["Heating","Cooling","Vent","WaterHeat","Cooking","Refrig",
-		"ExtLight","IntLight","OfficeEquip","Misc","Process","Motors","AirComp"],
-		["Heating","Cooling","Ventilation","Water Heating","Cooking","Refrigeration",
-		"Exterior Lighting","Interior Lighting","Office Equipment","Miscellaneous","Process","Motors","Air Compressors"]
-		))
+enduse_dict = dict(zip(
+	[	"Heating", "Cooling", "Vent", "WaterHeat", "Cooking", "Refrig",
+		"ExtLight", "IntLight", "OfficeEquip", "Misc", "Process", "Motors", "AirComp"],
+	[	"Heating", "Cooling", "Ventilation", "Water Heating", "Cooking", "Refrigeration",
+		"Exterior Lighting", "Interior Lighting", "Office Equipment", "Miscellaneous",
+		"Process", "Motors", "Air Compressors"],
+	))
 Theat = 55.0
 Tcool = 65.0
 
@@ -48,6 +104,7 @@ def load_xls(file,sheets='all'):
 			data[sheet.name].append(datarow)
 	return data
 
+# convert the xls data to a loadshape csv files
 def convert_to_loadshape(data,to_csv) :
 	print("updating from %s" % to_csv)
 
@@ -57,8 +114,6 @@ def convert_to_loadshape(data,to_csv) :
 	description = segment[1][1]
 	assert(segment[2][0]== "AnalysisYear")
 	analysis_year = int(segment[2][1])
-	#print("  segment........... %s" % description)
-	#print("  year.............. %s" % analysis_year)
 
 	# summary
 	summary = data["Summary"]
@@ -98,6 +153,7 @@ def convert_to_loadshape(data,to_csv) :
 			writer.writerow(row)
 	return None
 
+# process the xls folder
 def update_csv() :
 	for xls in os.listdir("xls/") :
 		if xls.endswith(".xls"):
@@ -119,10 +175,12 @@ def get_weather(station) :
 		print('get_weather(station=%s): no data found in LCD repository' % station)
 	return result
 
+# load a weather station data set
 def load_weather(station) :
 	data = pandas.read_csv('weather/%s.csv'%station)
 	return data
 
+# find all items in a list
 def find(data) :
 	result = []
 	for key, item in data.items() :
@@ -132,6 +190,7 @@ def find(data) :
 			result.append(key)
 	return result
 
+# process the weather data
 def update_weather() :
 	zones = pandas.read_csv('weather_zones.csv')
 	for ndx, zone in zones.iterrows() :
@@ -184,9 +243,9 @@ def update_sensitivity() :
 				#	result[fcz[0]] = {}
 				#result[fcz[0]][fcz[1]] = 
 				get_sensitivity(data,weather)
-	print("sensitivity/*.csv up to date")
+	print("sensitivity analysis up to date")
 
-
+# compute weather sensitvity
 def get_sensitivity(data,weather) :
 	segment = data['ctrlSEGINFO']
 	assert(segment[0][0]=='SegID')
@@ -256,18 +315,13 @@ def get_sensitivity(data,weather) :
 					if load[hour] > 0.0 :
 						T = weather["drybulb"][r]
 						c = hour0 + hour
-						#print("%s.%s(%2d,%2d): row %3d, col %2d, hour %2d, T %.1f, y %.1f" % (segment_name,enduse_name,month,day,r,c,hour,T,load[hour]))
 						if c > 0 :
 							A[enduse_name][r,0] = 1.0
 						A[enduse_name][r,c] = 1.0
 						if T < Theat and heat_col != None :
 							A[enduse_name][r,heat_col] = T - Theat
-							#print("%s.%s(%2d,%2d): row %3d, col %2d, hour %2d, Theat %.1f, y %.1f" % (segment_name,enduse_name,month,day,r,c,hour,T,load[hour]))
 						elif T > Tcool and cool_col != None:
 							A[enduse_name][r,cool_col] = Tcool - T
-							#print("%s.%s(%2d,%2d): row %3d, col %2d, hour %2d, Tcool %.1f, y %.1f" % (segment_name,enduse_name,month,day,r,c,hour,T,load[hour]))
-						#else :
-							#print("%s.%s(%2d,%2d): row %3d, col %2d, hour %2d, Tnone %.1f, y %.1f" % (segment_name,enduse_name,month,day,r,c,hour,T,load[hour]))
 						y[enduse_name][r] = load[hour]
 						found[enduse_name].append(r)
 	for enduse_name in enduse_keys :
@@ -278,8 +332,6 @@ def get_sensitivity(data,weather) :
 			cool_col = None
 			if 'Tcool' in senscols[enduse_name] :
 				cool_col = senscols[enduse_name]['Tcool']
-			#for row in range(len(found[enduse_name])) :
-				#print(AA[row,:],yy[row])	
 			try :
 				cols = []
 				AA = A[enduse_name][found[enduse_name],:]
@@ -290,23 +342,20 @@ def get_sensitivity(data,weather) :
 					cols.append(senscols[enduse_name]['Theat'])
 				if 'Tcool' in senscols[enduse_name] :
 					cols.append(senscols[enduse_name]['Tcool'])
-				#print('Columns: %s' % cols)
 				AA = AA[:,cols]
 				yy = y[enduse_name][found[enduse_name]]
-				#print('Enduse %s, %d samples, A is %dx%d, y is %dx%d'
-				#	% (enduse_name,len(found[enduse_name]),len(AA),len(cols), len(yy), len(cols)))
 				At = AA.transpose()
 				AtA = numpy.dot(At,AA)
 				AtAi = numpy.linalg.inv(AtA)
 				AtAiAt = numpy.dot(AtAi,At)
 				x = numpy.dot(AtAiAt,yy)
+				e = ((numpy.dot(AA,x) - yy)**2).mean()**0.5
 
 				# output
 				xx = numpy.zeros(50)
 				for h,xh in dict(zip(cols,x)).items() :
-					#print(h,xh[0],xx)
 					xx[h] = xh[0]
-				xx[1:47] += x[0]
+				xx[1:48] += x[0]
 				rs = pandas.DataFrame()
 				rs['WeekdayLoad'] = xx[0:24]
 				rs['WeekendLoad'] = xx[24:48]
@@ -318,14 +367,13 @@ def get_sensitivity(data,weather) :
 					rs['CoolingSensitivity'] = xx[senscols[enduse_name]['Tcool']]
 				else :
 					rs['CoolingSensitivity'] = 0.0
+				rs['ResidualError'] = e
 				rs.index.name = 'HourOfDay'
 				path = 'loadshape/%s' %  segment_name.replace('_','/')
 				if not os.path.exists(path) :
 					os.makedirs(path)
 				if os.path.isdir(path) :
 					rs.to_csv('%s/%s.csv' % (path,enduse_name))
-				#print(rs)
-				#result[enduse_name] = rs
 			except :
 				if not os.path.exists('dump') :
 					os.mkdir('dump')
@@ -335,7 +383,7 @@ def get_sensitivity(data,weather) :
 					pandas.DataFrame(AA).to_csv('dump/%s_%s_A.csv'%(segment_name,enduse_name))
 					pandas.DataFrame(yy).to_csv('dump/%s_%s_y.csv'%(segment_name,enduse_name))
 				raise
-	#return result
+
 #
 # MAIN
 #
