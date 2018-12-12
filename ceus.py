@@ -49,7 +49,7 @@ Updating the Output
 
   host% python ceus.py
 
-The process require roughly 10 minutes to update all data.  The 'weather' and enduse' 
+The process requires roughly 10 minutes to update all data.  The 'weather' and enduse' 
 files are only updated if they are missing, so you must delete the files to force them
 to be rebuilt.  The 'loadshape' file are always updated.
 
@@ -120,7 +120,7 @@ def convert_to_loadshape(data,to_csv) :
 	floorarea_list = []
 	for row in range(5,18) :
 		rowdata = summary[row]
-		assert(rowdata[1]==enduse_dict.values()[row-5])
+		assert(rowdata[1]==list(enduse_dict.values())[row-5])
 		floorarea_list.append(rowdata[2])	
 
 	# enduse
@@ -133,10 +133,10 @@ def convert_to_loadshape(data,to_csv) :
 	active_enduses = []
 	header = ["Month","Daytype","Hour"]
 	for col in range(4,17) :
-		assert(enduse_data[0][col]==enduse_dict.keys()[col-4])
+		assert(enduse_data[0][col]==list(enduse_dict.keys())[col-4])
 		if floorarea_list[col-4] > 0 :
 			active_enduses.append(col)
-			header.append(enduse_dict.values()[col-4].replace(" ","_"))
+			header.append(list(enduse_dict.values())[col-4].replace(" ","_"))
 	daytype_name = ["WEEKDAY","SATURDAY","SUNDAY","HOLIDAY"]
 	for row in range(1,2017) :
 		rowdata = enduse_data[row]
@@ -170,7 +170,7 @@ def update_csv() :
 def get_weather(station) :
 	data = pandas.read_csv('weather/lcd.csv', dtype={'HOURLYDRYBULBTEMPF':str}, usecols=['STATION','DATE','HOURLYDRYBULBTEMPF'])
 	ndx = find(data['STATION']==station)
-	result = data.ix[ndx,['DATE','HOURLYDRYBULBTEMPF']].dropna()
+	result = data.loc[ndx,['DATE','HOURLYDRYBULBTEMPF']].dropna()
 	if len(result) == 0 :
 		print('get_weather(station=%s): no data found in LCD repository' % station)
 	return result
@@ -207,13 +207,13 @@ def update_weather() :
 			else :
 				print("processing %s..." % name)
 			date = data['DATE']
-			first = data.iterrows().next()[0]
+			first = data.iterrows().__next__()[0]
 			year = datetime.datetime.strptime(date[first],'%Y-%m-%d %H:%M').year
 			starttime = datetime.datetime(year,1,1,0,0,0)
 			stoptime = datetime.datetime(year+1,1,1,0,0,0)
 			dt = list(map(lambda x: (datetime.datetime.strptime(x,'%Y-%m-%d %H:%M')-starttime).total_seconds()/3600.0,date))
 			hour = numpy.arange(0,8760,1)
-			timestamp = list(map(lambda x: (starttime+datetime.timedelta(hours=x)).strftime('%Y-%m-%d %H:%M:%S'),hour))
+			timestamp = list(map(lambda x: (starttime+datetime.timedelta(hours=int(x))).strftime('%Y-%m-%d %H:%M:%S'),hour))
 			Tdb = numpy.around(numpy.interp(numpy.arange(0,8760,1),dt,list(map(lambda x: numpy.float64(x),data['HOURLYDRYBULBTEMPF']))),1)
 			with open(file,'w') as csvfile:
 				writer = csv.writer(csvfile)
@@ -231,6 +231,7 @@ def update_weather() :
 def update_sensitivity() :
 	fcz = None
 	result = {}
+	weather = {}
 	for xls in os.listdir("xls/") :
 		if xls.endswith(".xls") :
 			csv = "sensitivity/%s.csv" % os.path.splitext(xls)[0]
@@ -238,11 +239,12 @@ def update_sensitivity() :
 				data = load_xls(file="xls/"+xls,sheets=['ctrlSEGINFO','expEndUse8760'])
 				if type(fcz) is None or fcz != xls.split('_')[0] :
 					fcz = xls.split('_')[0]
-					weather = load_weather(fcz)
+				if not fcz in weather.keys():
+					weather[fcz] = load_weather(fcz)
 				#if fcz[0] in result.keys() :
 				#	result[fcz[0]] = {}
 				#result[fcz[0]][fcz[1]] = 
-				get_sensitivity(data,weather)
+				get_sensitivity(data,weather[fcz])
 	print("sensitivity analysis up to date")
 
 # compute weather sensitvity
